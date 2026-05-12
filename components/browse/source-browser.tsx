@@ -41,7 +41,7 @@ export function SourceBrowser({ sourceId }: { sourceId: string }): React.ReactEl
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="sticky top-0 z-20 flex flex-col gap-2 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="sticky top-[env(safe-area-inset-top,0px)] z-20 flex flex-col gap-2 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
         <Link href="/browse" className="text-xs text-zinc-500">
           ‹ Sources
         </Link>

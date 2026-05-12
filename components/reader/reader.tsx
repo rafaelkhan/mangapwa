@@ -7,11 +7,12 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { getSource } from "@/lib/sources/registry";
 import { saveProgress, getProgress } from "@/lib/db/progress";
 import { touchLibraryLastRead } from "@/lib/db/library";
+import { recordChapterRead } from "@/lib/db/tracker";
 import { buildPageSrc, prefetchPages } from "@/lib/reader/prefetch";
 import { debounce } from "@/lib/utils/debounce";
 import { cn } from "@/lib/utils/cn";
 import { Button } from "@/components/ui/button";
-import type { Page } from "@/lib/sources/types";
+import type { MangaDetails, Page } from "@/lib/sources/types";
 
 type Mode = "vertical" | "paginated";
 
@@ -47,6 +48,16 @@ export function Reader({
     },
   });
 
+  // Shares the cache with the manga details page so this is usually a hit.
+  const detailsQuery = useQuery<MangaDetails, Error>({
+    queryKey: ["details", sourceId, mangaId],
+    queryFn: async () => {
+      const s = await getSource(sourceId);
+      return s.getDetails(mangaId);
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
   useEffect(() => {
     (async () => {
       const prog = await getProgress(sourceId, mangaId, chapterId);
@@ -78,6 +89,29 @@ export function Reader({
   useEffect(() => {
     if (pages.length > 0) prefetchPages(pages, currentIndex + 1, 3);
   }, [pages, currentIndex]);
+
+  // Log this chapter to the tracker once the reader reaches the last page.
+  const trackedRef = useRef(false);
+  useEffect(() => {
+    trackedRef.current = false;
+  }, [sourceId, mangaId, chapterId]);
+  useEffect(() => {
+    if (trackedRef.current) return;
+    if (pages.length === 0 || currentIndex < pages.length - 1) return;
+    const details = detailsQuery.data;
+    const chapter = details?.chapters.find((c) => c.id === chapterId);
+    trackedRef.current = true;
+    recordChapterRead({
+      sourceId,
+      mangaId,
+      mangaTitle: details?.title ?? mangaId,
+      chapterId,
+      chapterNumber: chapter?.number ?? 0,
+      chapterTitle: chapter?.title,
+    }).catch(() => {
+      trackedRef.current = false;
+    });
+  }, [currentIndex, pages.length, detailsQuery.data, sourceId, mangaId, chapterId]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -129,13 +163,14 @@ export function Reader({
   }
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <header
         className={cn(
           "absolute left-0 right-0 top-0 z-20 flex items-center justify-between px-4 py-3 transition-opacity",
           showChrome ? "opacity-100" : "pointer-events-none opacity-0"
         )}
         style={{
+          paddingTop: "calc(0.75rem + env(safe-area-inset-top))",
           background:
             "linear-gradient(to bottom, rgba(0,0,0,0.7), rgba(0,0,0,0))",
         }}
@@ -169,7 +204,8 @@ export function Reader({
           ref={containerRef}
           onScroll={onScroll}
           onClick={() => setShowChrome((v) => !v)}
-          className="flex-1 overflow-y-auto"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}
         >
           {pages.map((p, i) => (
             // eslint-disable-next-line @next/next/no-img-element
@@ -180,7 +216,7 @@ export function Reader({
               alt={`Page ${p.index + 1}`}
               loading={i === 0 ? "eager" : "lazy"}
               decoding="async"
-              className="block w-full"
+              className="block w-full min-h-[50vh] object-contain"
             />
           ))}
         </div>
@@ -199,6 +235,7 @@ export function Reader({
           showChrome ? "opacity-100" : "pointer-events-none opacity-0"
         )}
         style={{
+          paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))",
           background:
             "linear-gradient(to top, rgba(0,0,0,0.7), rgba(0,0,0,0))",
         }}
@@ -228,14 +265,48 @@ function PaginatedView({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "ArrowRight" || e.key === " ") next();
-      else if (e.key === "ArrowLeft") prev();
+      if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === " ") next();
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") prev();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Swipe support: up = next page, down = previous (so it reads "panel for
+  // panel, downward"); left/right work too. A detected swipe suppresses the
+  // click that iOS also fires, so we don't double-advance.
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipedRef = useRef(false);
+
+  function onTouchStart(e: React.TouchEvent) {
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+    swipedRef.current = false;
+  }
+  function onTouchEnd(e: React.TouchEvent) {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const THRESHOLD = 40;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > THRESHOLD) {
+      swipedRef.current = true;
+      if (dy < 0) next();
+      else prev();
+    } else if (Math.abs(dx) > THRESHOLD) {
+      swipedRef.current = true;
+      if (dx < 0) next();
+      else prev();
+    }
+  }
+
   function onTap(e: React.MouseEvent<HTMLDivElement>) {
+    if (swipedRef.current) {
+      swipedRef.current = false;
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const third = rect.width / 3;
@@ -248,6 +319,8 @@ function PaginatedView({
   return (
     <div
       onClick={onTap}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
       className="relative flex flex-1 items-center justify-center overflow-hidden"
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}

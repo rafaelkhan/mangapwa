@@ -1,10 +1,14 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { clearAutoCache, totalCachedBytes } from "@/lib/db/cache";
 import { listLibrary } from "@/lib/db/library";
+import { clearTracker } from "@/lib/db/tracker";
 import { listRepos } from "@/lib/sources/registry";
+import { setProfileName, useProfileName } from "@/lib/profile";
 import { toast } from "@/components/ui/toast";
 
 function formatBytes(n: number): string {
@@ -20,6 +24,19 @@ export function SettingsView(): React.ReactElement {
     queryKey: ["cache-bytes"],
     queryFn: totalCachedBytes,
   });
+
+  const profileName = useProfileName();
+  const [nameDraft, setNameDraft] = useState("");
+  useEffect(() => {
+    setNameDraft(profileName);
+  }, [profileName]);
+
+  function saveName(e: React.FormEvent) {
+    e.preventDefault();
+    const v = nameDraft.trim();
+    setProfileName(v);
+    toast(v ? `Tracking as ${v}` : "Tracker name cleared", "success");
+  }
 
   async function exportLibrary() {
     const [lib, repos] = await Promise.all([listLibrary(), listRepos()]);
@@ -46,6 +63,39 @@ export function SettingsView(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-6 p-4">
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">Tracker</h2>
+        <p className="mb-2 text-sm text-zinc-500">
+          Your name lives only on this device. Chapters you finish in the reader
+          are logged to the Tracker tab.
+        </p>
+        <form onSubmit={saveName} className="flex gap-2">
+          <Input
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            placeholder="Your name"
+            maxLength={40}
+            aria-label="Tracker name"
+          />
+          <Button type="submit" size="sm">
+            Save
+          </Button>
+        </form>
+        {profileName && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={async () => {
+              await clearTracker();
+              qc.invalidateQueries({ queryKey: ["tracker"] });
+              toast("Reading log cleared", "success");
+            }}
+          >
+            Clear reading log
+          </Button>
+        )}
+      </section>
       <section>
         <h2 className="mb-2 text-sm font-semibold">Storage</h2>
         <p className="text-sm">

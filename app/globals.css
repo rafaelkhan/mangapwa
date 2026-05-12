@@ -33,6 +33,16 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* The installed PWA uses viewport-fit=cover, so the web view draws under the
+   iOS status bar / notch / home indicator. Pad the body back into the safe
+   area so app chrome and content aren't clipped at the edges. The reader is
+   position:fixed and deliberately full-bleed — it pads its own chrome instead. */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
 img {
   -webkit-touch-callout: none;
 }

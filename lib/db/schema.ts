@@ -62,6 +62,17 @@ export interface DownloadedChapter {
   bytes: number;
 }
 
+export interface TrackerEntry {
+  key: string;
+  sourceId: string;
+  mangaId: string;
+  mangaTitle: string;
+  chapterId: string;
+  chapterNumber: number;
+  chapterTitle?: string;
+  readAt: number;
+}
+
 interface MangaPwaDB extends DBSchema {
   library: {
     key: string;
@@ -87,10 +98,15 @@ interface MangaPwaDB extends DBSchema {
     value: DownloadedChapter;
     indexes: { "by-manga": [string, string] };
   };
+  tracker: {
+    key: string;
+    value: TrackerEntry;
+    indexes: { "by-manga": [string, string]; "by-readAt": number };
+  };
 }
 
 const DB_NAME = "mangapwa";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<MangaPwaDB>> | null = null;
 
@@ -121,6 +137,11 @@ export function getDB(): Promise<IDBPDatabase<MangaPwaDB>> {
           });
           downloads.createIndex("by-manga", ["sourceId", "mangaId"]);
         }
+        if (oldVersion < 2) {
+          const tracker = db.createObjectStore("tracker", { keyPath: "key" });
+          tracker.createIndex("by-manga", ["sourceId", "mangaId"]);
+          tracker.createIndex("by-readAt", "readAt");
+        }
       },
     });
   }
@@ -140,6 +161,14 @@ export function progressKey(
 }
 
 export function downloadKey(
+  sourceId: string,
+  mangaId: string,
+  chapterId: string
+): string {
+  return `${sourceId}::${mangaId}::${chapterId}`;
+}
+
+export function trackerKey(
   sourceId: string,
   mangaId: string,
   chapterId: string

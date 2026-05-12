@@ -2,9 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { Check, Circle } from "lucide-react";
 import { getSource } from "@/lib/sources/registry";
 import { addToLibrary, isInLibrary, removeFromLibrary } from "@/lib/db/library";
 import { listMangaProgress } from "@/lib/db/progress";
+import {
+  listTrackerByManga,
+  recordChapterRead,
+  unrecordChapterRead,
+} from "@/lib/db/tracker";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import type { MangaDetails } from "@/lib/sources/types";
@@ -31,6 +37,32 @@ export function MangaDetailsView({
   const progress = useQuery({
     queryKey: ["progress", sourceId, mangaId],
     queryFn: () => listMangaProgress(sourceId, mangaId),
+  });
+  const tracker = useQuery({
+    queryKey: ["tracker", sourceId, mangaId],
+    queryFn: () => listTrackerByManga(sourceId, mangaId),
+  });
+
+  const toggleRead = useMutation({
+    mutationFn: async (chapter: MangaDetails["chapters"][number]) => {
+      const isRead = tracker.data?.some((t) => t.chapterId === chapter.id);
+      if (isRead) {
+        await unrecordChapterRead(sourceId, mangaId, chapter.id);
+      } else {
+        await recordChapterRead({
+          sourceId,
+          mangaId,
+          mangaTitle: details.data?.title ?? mangaId,
+          chapterId: chapter.id,
+          chapterNumber: chapter.number,
+          chapterTitle: chapter.title,
+        });
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracker"] });
+    },
+    onError: (e: Error) => toast(e.message, "error"),
   });
 
   const toggle = useMutation({
@@ -65,10 +97,14 @@ export function MangaDetailsView({
   }
   const m = details.data!;
   const progByChapter = new Map((progress.data ?? []).map((p) => [p.chapterId, p]));
+  const readChapterIds = new Set((tracker.data ?? []).map((t) => t.chapterId));
+  const readCount = m.chapters.filter(
+    (c) => readChapterIds.has(c.id) || progByChapter.get(c.id)?.completed
+  ).length;
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+      <header className="sticky top-[env(safe-area-inset-top,0px)] z-20 border-b border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
         <Link href={`/browse/${sourceId}`} className="text-xs text-zinc-500">
           ‹ Back
         </Link>
@@ -111,25 +147,31 @@ export function MangaDetailsView({
       <div className="border-t border-zinc-200 dark:border-zinc-800">
         <h2 className="px-4 py-3 text-sm font-semibold">
           Chapters ({m.chapters.length})
+          {readCount > 0 && (
+            <span className="ml-2 font-normal text-zinc-500">
+              · {readCount} read
+            </span>
+          )}
         </h2>
         <ul>
           {m.chapters.map((c) => {
             const prog = progByChapter.get(c.id);
+            const isRead = readChapterIds.has(c.id) || !!prog?.completed;
             return (
               <li
                 key={c.id}
-                className="border-t border-zinc-200 dark:border-zinc-800"
+                className="flex items-center border-t border-zinc-200 dark:border-zinc-800"
               >
                 <Link
                   href={`/read/${sourceId}/${encodeURIComponent(
                     mangaId
                   )}/${encodeURIComponent(c.id)}`}
-                  className="flex items-center justify-between px-4 py-3 text-sm"
+                  className="flex flex-1 items-center justify-between px-4 py-3 text-sm"
                 >
                   <div>
                     <p
                       className={
-                        prog?.completed
+                        isRead
                           ? "text-zinc-400 line-through dark:text-zinc-600"
                           : ""
                       }
@@ -150,6 +192,20 @@ export function MangaDetailsView({
                     </span>
                   )}
                 </Link>
+                <button
+                  type="button"
+                  onClick={() => toggleRead.mutate(c)}
+                  disabled={toggleRead.isPending}
+                  aria-label={isRead ? "Mark chapter unread" : "Mark chapter read"}
+                  title={isRead ? "Mark unread" : "Mark read"}
+                  className="shrink-0 px-4 py-3 text-zinc-300 transition-colors hover:text-zinc-600 disabled:opacity-50 dark:text-zinc-600 dark:hover:text-zinc-300"
+                >
+                  {isRead ? (
+                    <Check className="h-5 w-5 text-emerald-500" />
+                  ) : (
+                    <Circle className="h-5 w-5" />
+                  )}
+                </button>
               </li>
             );
           })}
