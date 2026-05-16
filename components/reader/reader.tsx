@@ -8,7 +8,7 @@ import { getSource } from "@/lib/sources/registry";
 import { saveProgress, getProgress } from "@/lib/db/progress";
 import { touchLibraryLastRead } from "@/lib/db/library";
 import { recordChapterRead } from "@/lib/db/tracker";
-import { isChapterDownloaded } from "@/lib/db/downloads";
+import { getDownloadedChapter } from "@/lib/db/downloads";
 import { buildPageSrc, prefetchPages } from "@/lib/reader/prefetch";
 import { debounce } from "@/lib/utils/debounce";
 import { cn } from "@/lib/utils/cn";
@@ -41,9 +41,16 @@ export function Reader({
     if (typeof window !== "undefined") localStorage.setItem(MODE_KEY, mode);
   }, [mode]);
 
+  // Prefer the offline copy: if the chapter is downloaded, rebuild the page
+  // list from the stored proxied URLs and never touch the network or the
+  // source module. Only fall back to the live source when not downloaded.
   const pagesQuery = useQuery<Page[], Error>({
     queryKey: ["pages", sourceId, mangaId, chapterId],
     queryFn: async () => {
+      const dl = await getDownloadedChapter(sourceId, mangaId, chapterId);
+      if (dl) {
+        return dl.pageUrls.map((url, index) => ({ index, url }));
+      }
       const s = await getSource(sourceId);
       return s.getPages(chapterId);
     },
@@ -58,15 +65,6 @@ export function Reader({
     },
     staleTime: 5 * 60 * 1000,
   });
-
-  // When the chapter is downloaded we must render the proxied URL so the
-  // service worker can serve the cached bytes offline (the download bucket is
-  // keyed on the proxy URL). Defaults to false so online reads stay direct.
-  const downloadedQuery = useQuery({
-    queryKey: ["downloaded", sourceId, mangaId, chapterId],
-    queryFn: () => isChapterDownloaded(sourceId, mangaId, chapterId),
-  });
-  const forceProxy = downloadedQuery.data === true;
 
   useEffect(() => {
     (async () => {
@@ -97,8 +95,8 @@ export function Reader({
   }, [currentIndex, pages.length, persistProgress]);
 
   useEffect(() => {
-    if (pages.length > 0) prefetchPages(pages, currentIndex + 1, 3, forceProxy);
-  }, [pages, currentIndex, forceProxy]);
+    if (pages.length > 0) prefetchPages(pages, currentIndex + 1, 3);
+  }, [pages, currentIndex]);
 
   // Log this chapter to the tracker once the reader reaches the last page.
   const trackedRef = useRef(false);
@@ -222,7 +220,7 @@ export function Reader({
             <img
               key={p.index}
               data-page={i}
-              src={buildPageSrc(p, forceProxy)}
+              src={buildPageSrc(p)}
               alt={`Page ${p.index + 1}`}
               loading={i === 0 ? "eager" : "lazy"}
               decoding="async"
@@ -234,7 +232,6 @@ export function Reader({
         <PaginatedView
           pages={pages}
           index={currentIndex}
-          forceProxy={forceProxy}
           onIndexChange={setCurrentIndex}
           onToggleChrome={() => setShowChrome((v) => !v)}
         />
@@ -262,13 +259,11 @@ export function Reader({
 function PaginatedView({
   pages,
   index,
-  forceProxy,
   onIndexChange,
   onToggleChrome,
 }: {
   pages: Page[];
   index: number;
-  forceProxy: boolean;
   onIndexChange: (i: number) => void;
   onToggleChrome: () => void;
 }): React.ReactElement {
@@ -339,7 +334,7 @@ function PaginatedView({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         key={page.index}
-        src={buildPageSrc(page, forceProxy)}
+        src={buildPageSrc(page)}
         alt={`Page ${page.index + 1}`}
         decoding="async"
         loading="eager"

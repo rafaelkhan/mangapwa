@@ -20,17 +20,21 @@ export function downloadSrc(page: Page): string {
   return buildPageSrc(page, true);
 }
 
+export async function getDownloadedChapter(
+  sourceId: string,
+  mangaId: string,
+  chapterId: string
+): Promise<DownloadedChapter | undefined> {
+  const db = await getDB();
+  return db.get("downloads", downloadKey(sourceId, mangaId, chapterId));
+}
+
 export async function isChapterDownloaded(
   sourceId: string,
   mangaId: string,
   chapterId: string
 ): Promise<boolean> {
-  const db = await getDB();
-  const entry = await db.get(
-    "downloads",
-    downloadKey(sourceId, mangaId, chapterId)
-  );
-  return !!entry;
+  return !!(await getDownloadedChapter(sourceId, mangaId, chapterId));
 }
 
 export async function listDownloadsByManga(
