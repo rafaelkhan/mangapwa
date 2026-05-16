@@ -1,10 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Check, Circle } from "lucide-react";
+import { Check, Circle, Download, Loader2, Trash2 } from "lucide-react";
 import { getSource } from "@/lib/sources/registry";
 import { addToLibrary, isInLibrary, removeFromLibrary } from "@/lib/db/library";
+import {
+  downloadChapter,
+  deleteDownload,
+  listDownloadsByManga,
+} from "@/lib/db/downloads";
 import { listMangaProgress } from "@/lib/db/progress";
 import {
   listTrackerByManga,
@@ -42,6 +48,71 @@ export function MangaDetailsView({
     queryKey: ["tracker", sourceId, mangaId],
     queryFn: () => listTrackerByManga(sourceId, mangaId),
   });
+  const downloads = useQuery({
+    queryKey: ["downloads", sourceId, mangaId],
+    queryFn: () => listDownloadsByManga(sourceId, mangaId),
+  });
+
+  // chapterId -> progress label ("n/total"); presence means a download is
+  // running for that chapter.
+  const [busy, setBusy] = useState<Record<string, string>>({});
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  async function downloadOne(
+    chapter: MangaDetails["chapters"][number]
+  ): Promise<void> {
+    setBusy((b) => ({ ...b, [chapter.id]: "…" }));
+    try {
+      const s = await getSource(sourceId);
+      const pages = await s.getPages(chapter.id);
+      await downloadChapter({
+        sourceId,
+        mangaId,
+        chapterId: chapter.id,
+        pages,
+        onProgress: (done, total) =>
+          setBusy((b) => ({ ...b, [chapter.id]: `${done}/${total}` })),
+      });
+      toast(`Downloaded Ch. ${chapter.number}`, "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy((b) => {
+        const next = { ...b };
+        delete next[chapter.id];
+        return next;
+      });
+      qc.invalidateQueries({ queryKey: ["downloads", sourceId, mangaId] });
+      qc.invalidateQueries({ queryKey: ["downloaded"] });
+    }
+  }
+
+  async function deleteOne(
+    chapter: MangaDetails["chapters"][number]
+  ): Promise<void> {
+    try {
+      await deleteDownload(sourceId, mangaId, chapter.id);
+      toast(`Removed Ch. ${chapter.number} download`, "success");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      qc.invalidateQueries({ queryKey: ["downloads", sourceId, mangaId] });
+      qc.invalidateQueries({ queryKey: ["downloaded"] });
+    }
+  }
+
+  async function downloadMany(
+    list: MangaDetails["chapters"][number][]
+  ): Promise<void> {
+    setBulkBusy(true);
+    try {
+      for (const c of list) {
+        await downloadOne(c);
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   const toggleRead = useMutation({
     mutationFn: async (chapter: MangaDetails["chapters"][number]) => {
@@ -101,6 +172,11 @@ export function MangaDetailsView({
   const readCount = m.chapters.filter(
     (c) => readChapterIds.has(c.id) || progByChapter.get(c.id)?.completed
   ).length;
+  const downloadedIds = new Set(
+    (downloads.data ?? []).map((d) => d.chapterId)
+  );
+  const undownloaded = m.chapters.filter((c) => !downloadedIds.has(c.id));
+  const anyBusy = bulkBusy || Object.keys(busy).length > 0;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -145,14 +221,45 @@ export function MangaDetailsView({
         </p>
       )}
       <div className="border-t border-zinc-200 dark:border-zinc-800">
-        <h2 className="px-4 py-3 text-sm font-semibold">
-          Chapters ({m.chapters.length})
-          {readCount > 0 && (
-            <span className="ml-2 font-normal text-zinc-500">
-              · {readCount} read
-            </span>
+        <div className="flex items-center justify-between gap-2 px-4 py-3">
+          <h2 className="text-sm font-semibold">
+            Chapters ({m.chapters.length})
+            {readCount > 0 && (
+              <span className="ml-2 font-normal text-zinc-500">
+                · {readCount} read
+              </span>
+            )}
+            {downloadedIds.size > 0 && (
+              <span className="ml-2 font-normal text-zinc-500">
+                · {downloadedIds.size} downloaded
+              </span>
+            )}
+          </h2>
+          {undownloaded.length > 0 && (
+            <div className="flex shrink-0 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={anyBusy}
+                onClick={() => downloadMany(undownloaded.slice(0, 5))}
+              >
+                {bulkBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Download 5"
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={anyBusy}
+                onClick={() => downloadMany(undownloaded)}
+              >
+                Download all
+              </Button>
+            </div>
           )}
-        </h2>
+        </div>
         <ul>
           {m.chapters.map((c) => {
             const prog = progByChapter.get(c.id);
@@ -192,6 +299,33 @@ export function MangaDetailsView({
                     </span>
                   )}
                 </Link>
+                {busy[c.id] !== undefined ? (
+                  <span className="flex shrink-0 items-center gap-1 px-3 py-3 text-xs text-zinc-500">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {busy[c.id]}
+                  </span>
+                ) : downloadedIds.has(c.id) ? (
+                  <button
+                    type="button"
+                    onClick={() => deleteOne(c)}
+                    aria-label="Delete download"
+                    title="Delete download"
+                    className="shrink-0 px-3 py-3 text-emerald-500 transition-colors hover:text-red-500"
+                  >
+                    <Trash2 className="h-5 w-5" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => downloadOne(c)}
+                    disabled={anyBusy}
+                    aria-label="Download chapter"
+                    title="Download chapter"
+                    className="shrink-0 px-3 py-3 text-zinc-300 transition-colors hover:text-zinc-600 disabled:opacity-50 dark:text-zinc-600 dark:hover:text-zinc-300"
+                  >
+                    <Download className="h-5 w-5" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => toggleRead.mutate(c)}

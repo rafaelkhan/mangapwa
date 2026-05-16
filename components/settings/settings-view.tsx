@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { clearAutoCache, totalCachedBytes } from "@/lib/db/cache";
+import { clearAllDownloads, downloadStats } from "@/lib/db/downloads";
 import { listLibrary } from "@/lib/db/library";
 import { clearTracker } from "@/lib/db/tracker";
 import { listRepos } from "@/lib/sources/registry";
@@ -23,6 +24,10 @@ export function SettingsView(): React.ReactElement {
   const bytes = useQuery({
     queryKey: ["cache-bytes"],
     queryFn: totalCachedBytes,
+  });
+  const downloads = useQuery({
+    queryKey: ["download-stats"],
+    queryFn: downloadStats,
   });
 
   const profileName = useProfileName();
@@ -117,6 +122,37 @@ export function SettingsView(): React.ReactElement {
             Request persistent storage
           </Button>
         </div>
+      </section>
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">Downloads</h2>
+        <p className="text-sm">
+          {downloads.data
+            ? `${downloads.data.chapters} chapter${
+                downloads.data.chapters === 1 ? "" : "s"
+              } · ${formatBytes(downloads.data.bytes)}`
+            : "—"}
+        </p>
+        <p className="mt-1 text-xs text-zinc-500">
+          Explicitly downloaded chapters are kept for offline reading and are
+          never auto-evicted.
+        </p>
+        {(downloads.data?.chapters ?? 0) > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={async () => {
+              await clearAllDownloads();
+              qc.invalidateQueries({ queryKey: ["download-stats"] });
+              qc.invalidateQueries({ queryKey: ["downloads"] });
+              qc.invalidateQueries({ queryKey: ["downloaded"] });
+              qc.invalidateQueries({ queryKey: ["cache-bytes"] });
+              toast("All downloads deleted", "success");
+            }}
+          >
+            Delete all downloads
+          </Button>
+        )}
       </section>
       <section>
         <h2 className="mb-2 text-sm font-semibold">Backup</h2>

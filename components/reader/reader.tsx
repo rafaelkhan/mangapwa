@@ -8,6 +8,7 @@ import { getSource } from "@/lib/sources/registry";
 import { saveProgress, getProgress } from "@/lib/db/progress";
 import { touchLibraryLastRead } from "@/lib/db/library";
 import { recordChapterRead } from "@/lib/db/tracker";
+import { isChapterDownloaded } from "@/lib/db/downloads";
 import { buildPageSrc, prefetchPages } from "@/lib/reader/prefetch";
 import { debounce } from "@/lib/utils/debounce";
 import { cn } from "@/lib/utils/cn";
@@ -58,6 +59,15 @@ export function Reader({
     staleTime: 5 * 60 * 1000,
   });
 
+  // When the chapter is downloaded we must render the proxied URL so the
+  // service worker can serve the cached bytes offline (the download bucket is
+  // keyed on the proxy URL). Defaults to false so online reads stay direct.
+  const downloadedQuery = useQuery({
+    queryKey: ["downloaded", sourceId, mangaId, chapterId],
+    queryFn: () => isChapterDownloaded(sourceId, mangaId, chapterId),
+  });
+  const forceProxy = downloadedQuery.data === true;
+
   useEffect(() => {
     (async () => {
       const prog = await getProgress(sourceId, mangaId, chapterId);
@@ -87,8 +97,8 @@ export function Reader({
   }, [currentIndex, pages.length, persistProgress]);
 
   useEffect(() => {
-    if (pages.length > 0) prefetchPages(pages, currentIndex + 1, 3);
-  }, [pages, currentIndex]);
+    if (pages.length > 0) prefetchPages(pages, currentIndex + 1, 3, forceProxy);
+  }, [pages, currentIndex, forceProxy]);
 
   // Log this chapter to the tracker once the reader reaches the last page.
   const trackedRef = useRef(false);
@@ -212,7 +222,7 @@ export function Reader({
             <img
               key={p.index}
               data-page={i}
-              src={buildPageSrc(p)}
+              src={buildPageSrc(p, forceProxy)}
               alt={`Page ${p.index + 1}`}
               loading={i === 0 ? "eager" : "lazy"}
               decoding="async"
@@ -224,6 +234,7 @@ export function Reader({
         <PaginatedView
           pages={pages}
           index={currentIndex}
+          forceProxy={forceProxy}
           onIndexChange={setCurrentIndex}
           onToggleChrome={() => setShowChrome((v) => !v)}
         />
@@ -251,11 +262,13 @@ export function Reader({
 function PaginatedView({
   pages,
   index,
+  forceProxy,
   onIndexChange,
   onToggleChrome,
 }: {
   pages: Page[];
   index: number;
+  forceProxy: boolean;
   onIndexChange: (i: number) => void;
   onToggleChrome: () => void;
 }): React.ReactElement {
@@ -326,7 +339,7 @@ function PaginatedView({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         key={page.index}
-        src={buildPageSrc(page)}
+        src={buildPageSrc(page, forceProxy)}
         alt={`Page ${page.index + 1}`}
         decoding="async"
         loading="eager"

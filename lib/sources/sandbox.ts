@@ -37,7 +37,12 @@ export function proxyImageUrl(
   const proxied = new URL("/api/proxy", window.location.origin);
   proxied.searchParams.set("url", url);
   if (headers && Object.keys(headers).length > 0) {
-    proxied.searchParams.set("h", btoa(JSON.stringify(headers)));
+    // Serialize with sorted keys so the same header set always yields the same
+    // proxy URL regardless of object insertion order. The offline cache keys
+    // on this string, so it must be stable between download and read time.
+    const ordered: Record<string, string> = {};
+    for (const k of Object.keys(headers).sort()) ordered[k] = headers[k];
+    proxied.searchParams.set("h", btoa(JSON.stringify(ordered)));
   }
   return proxied.toString();
 }
