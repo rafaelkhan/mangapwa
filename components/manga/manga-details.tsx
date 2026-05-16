@@ -70,6 +70,9 @@ export function MangaDetailsView({
         mangaId,
         chapterId: chapter.id,
         pages,
+        mangaTitle: details.data?.title,
+        chapterNumber: chapter.number,
+        chapterTitle: chapter.title,
         onProgress: (done, total) =>
           setBusy((b) => ({ ...b, [chapter.id]: `${done}/${total}` })),
       });

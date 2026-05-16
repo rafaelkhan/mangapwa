@@ -57,6 +57,65 @@ export async function downloadStats(): Promise<{
   };
 }
 
+export interface DownloadedChapterSummary {
+  chapterId: string;
+  chapterNumber?: number;
+  chapterTitle?: string;
+  bytes: number;
+  downloadedAt: number;
+}
+
+export interface DownloadedMangaGroup {
+  sourceId: string;
+  mangaId: string;
+  mangaTitle: string;
+  bytes: number;
+  chapters: DownloadedChapterSummary[];
+}
+
+/**
+ * All downloads grouped by manga, sorted for display. Pure IndexedDB — never
+ * touches a source or the network, so it works fully offline and backs the
+ * /downloads entry point.
+ */
+export async function listDownloadedManga(): Promise<DownloadedMangaGroup[]> {
+  const db = await getDB();
+  const all = await db.getAll("downloads");
+  const groups = new Map<string, DownloadedMangaGroup>();
+  for (const d of all) {
+    const gk = `${d.sourceId}::${d.mangaId}`;
+    let g = groups.get(gk);
+    if (!g) {
+      g = {
+        sourceId: d.sourceId,
+        mangaId: d.mangaId,
+        mangaTitle: d.mangaTitle ?? d.mangaId,
+        bytes: 0,
+        chapters: [],
+      };
+      groups.set(gk, g);
+    } else if (d.mangaTitle && g.mangaTitle === d.mangaId) {
+      g.mangaTitle = d.mangaTitle;
+    }
+    g.bytes += d.bytes;
+    g.chapters.push({
+      chapterId: d.chapterId,
+      chapterNumber: d.chapterNumber,
+      chapterTitle: d.chapterTitle,
+      bytes: d.bytes,
+      downloadedAt: d.downloadedAt,
+    });
+  }
+  const list = [...groups.values()];
+  for (const g of list) {
+    g.chapters.sort(
+      (a, b) => (a.chapterNumber ?? 0) - (b.chapterNumber ?? 0)
+    );
+  }
+  list.sort((a, b) => a.mangaTitle.localeCompare(b.mangaTitle));
+  return list;
+}
+
 /**
  * Fetch every page of a chapter and persist it into the durable download
  * cache bucket. Best-effort requests persistent storage first so iOS does not
@@ -68,6 +127,9 @@ export async function downloadChapter(input: {
   mangaId: string;
   chapterId: string;
   pages: Page[];
+  mangaTitle?: string;
+  chapterNumber?: number;
+  chapterTitle?: string;
   onProgress?: (done: number, total: number) => void;
 }): Promise<DownloadedChapter> {
   const { sourceId, mangaId, chapterId, pages } = input;
@@ -128,6 +190,9 @@ export async function downloadChapter(input: {
       pageUrls,
       downloadedAt: Date.now(),
       bytes,
+      mangaTitle: input.mangaTitle,
+      chapterNumber: input.chapterNumber,
+      chapterTitle: input.chapterTitle,
     };
     await db.put("downloads", entry);
     return entry;

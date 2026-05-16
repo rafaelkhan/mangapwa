@@ -60,6 +60,12 @@ export interface DownloadedChapter {
   pageUrls: string[];
   downloadedAt: number;
   bytes: number;
+  // Display metadata captured at download time so the offline Downloads
+  // view can render without ever touching the source or the network.
+  // Optional: records created before this was added fall back to ids.
+  mangaTitle?: string;
+  chapterNumber?: number;
+  chapterTitle?: string;
 }
 
 export interface TrackerEntry {
